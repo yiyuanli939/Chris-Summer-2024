@@ -134,11 +134,11 @@ log_likelihood <- function(params, X, y, rule) {
 # This create a result with better format 
 set.seed(42)
 # Generate the true information about the data
-n_clusters <- 1000
+n_clusters <- 200
 n_per_cluster <- 1
 beta_true <- c(3,-4,5,-6,2,5)  # Added more beta parameters
 sigma_true <- 1
-tau_true <- c(-3,3,-2)  # Added more tau parameters
+tau_true <- c(-3,2,3)  # Added more tau parameters
 
 data <- generate_data(n_clusters, n_per_cluster, beta_true, sigma_true, tau_true)
 
@@ -169,20 +169,16 @@ result <- optimr(initial_params, log_likelihood, X = X, y = y, rule = rule,
 
 
 
-
-```{r}
-```
-
-
 ```{r}
 result$par
 ```
-
-
-
-
-
-
-
+```{r}
+# Perform optimization
+result <- optimr(initial_params,log_likelihood, X = X, y = y, rule = rule, 
+                 method = "BFGS", control = list(maxit = 1e9))
+# log-back the result 
+result$par
+```
+```
 
 

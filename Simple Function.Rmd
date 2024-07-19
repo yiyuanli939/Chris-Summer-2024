@@ -1,0 +1,9 @@
+---
+title: "Sixth Week Report"
+subtitle: Summer 2024
+output:
+  pdf_document:
+    extra_dependencies: amsmath
+  word_document: default
+header-includes: \usepackage{amsmath}
+---
