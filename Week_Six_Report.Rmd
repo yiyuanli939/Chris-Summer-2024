@@ -8,3 +8,181 @@ output:
 header-includes: \usepackage{amsmath}
 ---
 
+In this report, I want to deal with several problems for the current maximum likelihood approach. Now, the complexity may lead to the non-convexity of the likelihood function. The high-dimensional parameter space may also lead to the slow convergence of the optimization algorithm. The most important thing is that the aghQuad function is still a blackbox, which needs to be analyzed. 
+
+The problem
+
+(1) The instability of two optim method:
+
+It can be solved by adding more iterations. 
+
+(2) The aghQuad function is still a blackbox, which needs to be analyzed.
+
+
+(3) We need to accelerate the current functions. 
+
+
+
+
+```{r}
+library(Rcpp)
+library(ggplot2)
+library(fastGHQuad)
+library(optimx)
+```
+
+### The Mathematical Background of Mu_hat and Sigma_hat
+
+$$
+\mu_{\text{hat},i} = \arg\max_{v} \left[\log\left(\prod_{a=1}^A \left[\Phi(\tau_a - X_i'\beta - v)^{1-y_{ia}} \cdot (1 - \Phi(\tau_a - X_i'\beta - v))^{y_{ia}}\right]\right) - \frac{v^2}{2\sigma_v^2}\right]
+$$
+$$
+\sigma_{\text{hat},i} = \sqrt{-\left.\left(\frac{\partial^2}{\partial v^2} \left[\log\left(\prod_{a=1}^A \left[\Phi(\tau_a - X_i'\beta - v)^{1-y_{ia}} \cdot (1 - \Phi(\tau_a - X_i'\beta - v))^{y_{ia}}\right]\right) - \frac{v^2}{2\sigma_v^2}\right]\right)^{-1}\right|{v=\mu{\text{hat},i}}}
+$$
+
+
+
+```{r include=FALSE}
+generate_data <- function(n_clusters, n_per_cluster, beta, sigma, tau) {
+  cluster_id <- rep(1:n_clusters, each = n_per_cluster)
+  
+  # Generate multiple x variables
+  X <- matrix(rnorm(n_clusters * n_per_cluster * (length(beta) - 1)), 
+              nrow = n_clusters * n_per_cluster)
+  
+  u <- rnorm(n_clusters, 0, sigma)
+  u_repeated <- rep(u, each = n_per_cluster)
+  
+  epsilon <- rnorm(n_clusters * n_per_cluster)
+  #epsilon <- 0 
+  
+  star_y <- beta[1] + X %*% beta[-1] + u_repeated + epsilon
+  
+  y_list <- lapply(tau, function(t) as.numeric(star_y > t))
+  data <- data.frame(
+    cluster = cluster_id,
+    X = X,
+    true_u = u_repeated,
+    star_y = star_y
+  )
+  for (i in 1:length(tau)) {
+    col_name <- paste0("y_", i)
+    data[[col_name]] <- y_list[[i]]
+  }
+  for (i in 1:length(tau)) {
+    col_name2 <- paste0("true_tau_", i)
+    data[[col_name2]] <- tau[i]
+  }
+  return(data)
+}
+```
+
+```{r}
+library(fastGHQuad)
+
+g <- function(v_i, X_i, beta, tau, d_i, sigma_v) {
+  A <- length(d_i)
+  
+  normal_density <- exp(-v_i^2 / (2 * sigma_v^2)) / sqrt(2 * pi * sigma_v^2)
+  
+  X_i_beta <- as.vector(X_i %*% beta)
+  
+  product_term <- 1
+  
+  for (a in 1:A) {
+    phi_term <- d_i[a] * pnorm(-tau[a] + X_i_beta + v_i) + 
+                (1 - d_i[a]) * pnorm(tau[a] - X_i_beta - v_i)
+    product_term <- product_term * phi_term
+  }
+  
+  return(normal_density * product_term)
+}
+
+compute_log_prob <- function(X_i, d_i, beta, tau, sigma_v, rule) {
+  prob <- ghQuad(
+    f = function(v_i) g(v_i, X_i = X_i, beta = beta, tau = tau, d_i = d_i, sigma_v = sigma_v),
+    rule = rule
+  )
+  return(log(prob))
+}
+
+log_likelihood <- function(params, X, y, rule) {
+  n_beta <- ncol(X)
+  n_tau <- ncol(y)
+  
+  beta <- params[1:n_beta]
+  tau <- params[(n_beta+1):(n_beta+n_tau)]
+  sigma_v <- params[n_beta+n_tau+1] # Ensure sigma_v is positive
+  
+  log_probs <- sapply(1:nrow(X), function(i) {
+    compute_log_prob(X[i,], y[i,], beta, tau, sigma_v, rule)
+  })
+  
+  return(-sum(log_probs))  # Return negative log-likelihood for minimization
+}
+```
+
+
+
+
+
+
+
+
+
+```{r}
+# This create a result with better format 
+set.seed(42)
+# Generate the true information about the data
+n_clusters <- 1000
+n_per_cluster <- 1
+beta_true <- c(3,-4,5,-6,2,5)  # Added more beta parameters
+sigma_true <- 1
+tau_true <- c(-3,3,-2)  # Added more tau parameters
+
+data <- generate_data(n_clusters, n_per_cluster, beta_true, sigma_true, tau_true)
+
+# Set up Gauss-Hermite quadrature rule
+rule <- gaussHermiteData(100)
+
+# Prepare data for optimization
+X <- cbind(1, as.matrix(data[, grep("^X", names(data))]))
+y <- as.matrix(data[, grep("^y_", names(data))])
+
+# Initial parameter values
+initial_beta <- rep(0, ncol(X))
+initial_tau <- rep(1, ncol(y))
+initial_sigma <- 1
+initial_params <- c(initial_beta, initial_tau, initial_sigma)
+
+options(scipen=999)
+```
+
+```{r}
+result <- optimr(initial_params, log_likelihood, X = X, y = y, rule = rule, 
+                 method = "L-BFGS-B", 
+                 lower = c(rep(-Inf, length(initial_params) - 1), 1e-10),
+                 upper = rep(Inf, length(initial_params)),
+                 control = list(maxit = 1000))
+# log-back the result
+```
+
+
+
+
+```{r}
+```
+
+
+```{r}
+result$par
+```
+
+
+
+
+
+
+
+
+
