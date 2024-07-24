@@ -39,14 +39,12 @@ P(y_i^a = 1 | X_i) &= P(X_i^{\prime} \beta + \varepsilon_i > \tau^a) \\
 \end{aligned}
 $$
 
-
-
 The same model has another form of expression in terms of 
 
 $$
 \begin{aligned}
-& \theta_i \sim N(0,1) \quad i=1, \ldots, N \\
-& P(y_i^a = 1 | \theta_i, a_a, b_a) = \Phi(a_a(\theta_i - b_a)) \quad a=1, \ldots, A
+P(y_i^a = 1 | \theta_i, a_a, b_a) &= \Phi(a_a(\theta_i - b_a)) \quad a=1, \ldots, A \\
+\theta_i &\sim N(0,1) \quad i=1, \ldots, N 
 \end{aligned}
 $$
 where 
@@ -61,6 +59,193 @@ $a_a$ is the discrimination parameter for item $a$
 
 $b_a$ is the difficulty parameter for item $a$
 
+
+### Simulation Result 
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Step 1: Set up parameters
+N <- 1000  # number of respondents
+P <- 3     # number of predictor variables
+A <- 5     # number of items/indicators
+
+# Arbitrarily set beta and tau
+beta <- c(0.8, -0.5, 1.2)
+tau <- c(-1.5, -0.5, 0, 0.5, 1.5)
+
+# Step 2: Generate latent variables
+X <- matrix(rnorm(N*P), nrow=N, ncol=P)
+colnames(X) <- paste0("X", 1:P)
+epsilon <- rnorm(N)
+y_star <- X %*% beta + epsilon
+
+# Step 3: Check if y_star passes each threshold tau
+Y <- matrix(0, nrow=N, ncol=A)
+colnames(Y) <- paste0("Y", 1:A)
+for(a in 1:A) {
+  Y[,a] <- as.integer(y_star > tau[a])
+}
+
+# Create a data frame
+df <- data.frame(
+  id = 1:N,
+  X,
+  y_star = y_star,
+  Y
+)
+
+# Print first few rows of the data frame
+cat("\nFirst 5 rows of the data frame:\n")
+print(head(df, 5))
+```
+
+### Simulation by Rstan 
+
+
+```{r message=TRUE, warning=TRUE}
+library(rstan)
+
+# Stan model
+stan_model <- "
+data {
+  int<lower=1> N;  // number of observations
+  int<lower=1> K;  // number of predictors
+  int<lower=1> M;  // number of items
+  matrix[N, K] X;  // predictor matrix
+  int<lower=0, upper=1> Y[N, M];  // binary response matrix
+}
+
+parameters {
+  vector[K] beta;  // coefficients
+  vector[M] tau;   // thresholds
+}
+
+model {
+  // Priors
+  beta ~ normal(0, 5);
+  tau ~ normal(0, 5);
+
+  // Likelihood
+  for (j in 1:M) {
+    Y[,j] ~ bernoulli(Phi(X * beta - tau[j]));
+  }
+}
+"
+
+# Compile the model
+stan_model_compiled <- stan_model(model_code = stan_model)
+
+# Prepare data
+X <- as.matrix(df[, c("X1", "X2", "X3")])
+Y <- as.matrix(df[, paste0("Y", 1:A)])
+stan_data <- list(
+  N = nrow(X),
+  K = ncol(X),
+  M = ncol(Y),
+  X = X,
+  Y = Y
+)
+
+# Fit the model
+fit <- sampling(stan_model_compiled, data = stan_data, iter = 2000, chains = 4)
+```
+
+
+```{r}
+# Extract results
+posterior <- extract(fit)
+estimated_beta <- colMeans(posterior$beta)
+estimated_tau <- colMeans(posterior$tau)
+
+# Calculate standard errors
+se_beta <- apply(posterior$beta, 2, sd)
+se_tau <- apply(posterior$tau, 2, sd)
+
+cat(
+  "Estimated beta coefficients (shared across all items):\n",
+  paste(round(estimated_beta, 4), collapse = ", "), "\n\n",
+  "Standard errors for beta:\n",
+  paste(round(se_beta, 4), collapse = ", "), "\n\n",
+  "Estimated thresholds (tau) for each item:\n",
+  paste(round(estimated_tau, 4), collapse = ", "), "\n\n",
+  "Standard errors for tau:\n",
+  paste(round(se_tau, 4), collapse = ", "), "\n\n",
+  "True beta coefficients:\n",
+  paste(round(beta, 4), collapse = ", "), "\n\n",
+  "True thresholds:\n",
+  paste(round(tau, 4), collapse = ", "), "\n",
+  sep = ""
+)
+```
+
+
+
+
+### Simulation by Maximum Likelihood Estimation
+
+$$
+\begin{aligned}
+L(\boldsymbol{\beta}, \boldsymbol{\tau} | \mathbf{X}, \mathbf{Y}) &= \sum_{j=1}^M \sum_{i=1}^N \left[ Y_{ij} \log(p_{ij}) + (1 - Y_{ij}) \log(1 - p_{ij}) \right] \\
+\text{ where } p_{ij} &= \Phi(\mathbf{X}_i \boldsymbol{\beta} - \tau_j)
+\end{aligned}
+$$
+
+
+```{r}
+# Prepare data
+X <- as.matrix(df[, c("X1", "X2", "X3")])
+Y <- as.matrix(df[, paste0("Y", 1:A)])
+
+# Log-likelihood function
+log_likelihood <- function(params, X, Y) {
+  beta <- params[1:3]
+  tau <- params[4:8]
+  
+  ll <- 0
+  for (j in 1:ncol(Y)) {
+    p <- pnorm(X %*% beta - tau[j])
+    ll <- ll + sum(dbinom(Y[,j], size = 1, prob = p, log = TRUE))
+  }
+  return(-ll)  # Return negative log-likelihood for minimization
+}
+
+# Initial parameter values
+initial_params <- c(rep(0, 3), rep(0, 5))  # 3 betas and 5 taus
+
+# Optimize using optim
+fit <- optim(par = initial_params, 
+             fn = log_likelihood, 
+             X = X, 
+             Y = Y, 
+             method = "BFGS", 
+             hessian = TRUE)
+
+# Extract results
+beta_estimates <- fit$par[1:3]
+tau_estimates <- fit$par[4:8]
+
+# Calculate standard errors
+se <- sqrt(diag(solve(fit$hessian)))
+beta_se <- se[1:3]
+tau_se <- se[4:8]
+
+# Print results
+cat("Beta estimates:\n")
+print(beta_estimates)
+cat("\nBeta standard errors:\n")
+print(beta_se)
+cat("\nTau estimates:\n")
+print(tau_estimates)
+cat("\nTau standard errors:\n")
+print(tau_se)
+
+# Compare with true values
+cat("\nTrue beta coefficients:\n")
+print(beta)
+cat("\nTrue thresholds:\n")
+print(tau)
+```
 
 
 
